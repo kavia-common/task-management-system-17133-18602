@@ -1,48 +1,148 @@
-import React, { useState, useEffect } from 'react';
-import logo from './logo.svg';
+import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
+import './index.css';
+import { fetchTasks, createTask, updateTask, deleteTask } from './services/api';
+import TaskList from './components/TaskList';
+import TaskForm from './components/TaskForm';
+import Header from './components/Header';
+import Footer from './components/Footer';
+import { ThemeProvider } from './theme/ThemeContext';
 
-// PUBLIC_INTERFACE
+/**
+ * App - Main dashboard for the Task Manager frontend.
+ * Implements Ocean Professional theme and provides CRUD interactions via REST API.
+ */
 function App() {
-  const [theme, setTheme] = useState('light');
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [error, setError] = useState(null);
+  const [filter, setFilter] = useState('all'); // all | active | completed
+  const [search, setSearch] = useState('');
 
-  // Effect to apply theme to document element
+  // Load tasks on mount
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
+    let isMounted = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const data = await fetchTasks();
+        if (isMounted) setTasks(data);
+      } catch (e) {
+        setError('Failed to load tasks.');
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, []);
+
+  const filteredTasks = useMemo(() => {
+    let t = tasks;
+    if (filter === 'active') t = t.filter(x => !x.completed);
+    if (filter === 'completed') t = t.filter(x => x.completed);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      t = t.filter(x => x.title?.toLowerCase().includes(q) || x.description?.toLowerCase().includes(q));
+    }
+    return t;
+  }, [tasks, filter, search]);
 
   // PUBLIC_INTERFACE
-  const toggleTheme = () => {
-    setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
-  };
+  async function handleCreate(form) {
+    /**
+     * Create a new task using the backend API and update local state.
+     */
+    try {
+      setError(null);
+      const created = await createTask(form);
+      setTasks(prev => [created, ...prev]);
+    } catch (e) {
+      setError('Failed to create task.');
+    }
+  }
+
+  // PUBLIC_INTERFACE
+  async function handleUpdate(id, form) {
+    /**
+     * Update an existing task using the backend API and update local state.
+     */
+    try {
+      setError(null);
+      const updated = await updateTask(id, form);
+      setTasks(prev => prev.map(t => (t.id === id ? updated : t)));
+      setEditing(null);
+    } catch (e) {
+      setError('Failed to update task.');
+    }
+  }
+
+  // PUBLIC_INTERFACE
+  async function handleDelete(id) {
+    /**
+     * Delete a task using the backend API and update local state.
+     */
+    try {
+      setError(null);
+      await deleteTask(id);
+      setTasks(prev => prev.filter(t => t.id !== id));
+      if (editing?.id === id) setEditing(null);
+    } catch (e) {
+      setError('Failed to delete task.');
+    }
+  }
+
+  // PUBLIC_INTERFACE
+  function toggleComplete(task) {
+    /**
+     * Optimistically toggle completion and sync with backend.
+     */
+    const optimistic = { ...task, completed: !task.completed };
+    setTasks(prev => prev.map(t => (t.id === task.id ? optimistic : t)));
+    updateTask(task.id, { completed: optimistic.completed }).catch(() => {
+      // revert on failure
+      setTasks(prev => prev.map(t => (t.id === task.id ? task : t)));
+      setError('Failed to toggle completion.');
+    });
+  }
 
   return (
-    <div className="App">
-      <header className="App-header">
-        <button 
-          className="theme-toggle" 
-          onClick={toggleTheme}
-          aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-        >
-          {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
-        </button>
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <p>
-          Current theme: <strong>{theme}</strong>
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <ThemeProvider>
+      <div className="ocean-app">
+        <Header
+          onSearch={setSearch}
+          onFilterChange={setFilter}
+          currentFilter={filter}
+        />
+        <main className="dashboard">
+          <section className="panel panel-form">
+            <TaskForm
+              key={editing ? `edit-${editing.id}` : 'create'}
+              initialData={editing}
+              onCancel={() => setEditing(null)}
+              onSubmit={(payload) =>
+                editing ? handleUpdate(editing.id, payload) : handleCreate(payload)
+              }
+            />
+            {error && <div className="alert error" role="alert">{error}</div>}
+          </section>
+
+          <section className="panel panel-list">
+            <div className="panel-heading">
+              <h2 className="panel-title">Tasks</h2>
+              {loading && <div className="spinner" aria-label="Loading tasks" />}
+            </div>
+            <TaskList
+              tasks={filteredTasks}
+              onEdit={setEditing}
+              onDelete={handleDelete}
+              onToggleComplete={toggleComplete}
+            />
+          </section>
+        </main>
+        <Footer />
+      </div>
+    </ThemeProvider>
   );
 }
 
